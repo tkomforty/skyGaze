@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Washed Out Waves</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #111; color: #eee; font-family: sans-serif; }
+        canvas { display: block; }
+        #instructions { position: absolute; top: 10px; left: 10px; z-index: 10; opacity: 1; transition: opacity 1s; color: #ccc; }
+    </style>
+    <!-- Load P5.js and Tone.js libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.min.js"></script>
+</head>
+<body>
+    <div id="instructions">Tap/Click to start the audio-visual experience.</div>
+    <script>
+        // --- Global Variables ---
+        let audioStarted = false;
+        let padSynth, melodySynth; // Changed noiseSynth to melodySynth
+        let chorus, reverb, melodyDelay; // Added melodyDelay, removed distortion
+        let fft, meter;
+        let filterLFO, padFilter; // Removed noiseLFO
+
+        let time = 0; // p5 time for noise animation
+        let particles = []; // Array for particles
+        let currentPadNotes = []; // Store current pad notes for melody generation
+        let mouseTarget = null; // Store mouse click location
+
+        // --- P5.js Setup ---
+        function setup() {
+            createCanvas(windowWidth, windowHeight);
+            colorMode(HSB, 360, 100, 100, 100);
+            noiseDetail(2, 0.6); // Initial noise detail
+            console.log("Shoegaze Waves Setup Complete");
+        }
+
+        // --- P5.js Draw Loop ---
+        function draw() {
+            // background(0); // Clear background or use low alpha for trails
+            // No background clear for maximum wash/trail effect
+
+            if (!audioStarted) return; // Wait for audio init
+
+            let spectrum = fft.getValue();
+            let level = meter.getValue(); // dB
+
+            // Map audio level to visual intensity/speed
+            // Level is in dB (-Infinity to 0), map to a usable range (e.g., 0 to 1)
+            let intensity = map(level, -60, 0, 0, 1, true);
+
+            // --- Update & Draw Particles ---
+            for (let i = particles.length - 1; i >= 0; i--) {
+                particles[i].followField();
+                if (mouseTarget) { // Apply seek behavior if target exists
+                    particles[i].seek(mouseTarget);
+                }
+                particles[i].update();
+                particles[i].display();
+                if (particles[i].isDead()) {
+                    particles.splice(i, 1);
+                }
+            }
+             // Add new particles occasionally based on intensity (increased rate)
+             if (random() < intensity * 0.8 && particles.length < 200) { // Increased rate and max particles
+                 particles.push(new Particle(random(width), random(height)));
+             }
+
+
+            // --- Draw Noise Layers ---
+            // Use default blend mode (BLEND)
+background(240, 10, 5, 2); // Lower alpha again for more trails
+
+            // Draw layers normally
+            drawNoiseLayer(1, intensity, spectrum, 220); // Base layer (cool color)
+            drawNoiseLayer(2, intensity, spectrum, 300); // Mid layer (warm color)
+            drawNoiseLayer(3, intensity, spectrum, 0);   // Top layer (accent color)
+
+            time += 0.005 + intensity * 0.01; // Base speed + speed based on intensity
+        }
+
+
+        function drawNoiseLayer(layerIndex, intensity, spectrum, baseHue) {
+            push();
+            let noiseScale = (0.001 + intensity * 0.001) * layerIndex; // Scale increases with intensity and layer
+            let noiseSpeed = time * (0.3 * layerIndex);
+            // Adjust alpha: slightly higher base, less dependent on intensity maybe?
+            let layerAlpha = 5 + intensity * 8 / layerIndex;
+
+            // Determine color variation based on spectrum
+            let hue = baseHue;
+            let saturation = 30 + intensity * 30; // Desaturated base, more saturated when loud
+            let brightness = 70 + intensity * 30; // Dim base, brighter when loud
+
+            if (spectrum && spectrum.length > 0) {
+                let maxVal = -Infinity;
+                let maxIndex = 0;
+                // Focus on lower-mid frequencies for pads
+                for (let i = 0; i < spectrum.length / 2; i++) {
+                    if (spectrum[i] > maxVal) {
+                        maxVal = spectrum[i];
+                        maxIndex = i;
+                    }
+                }
+                 // Map index to hue variation around baseHue
+                 let hueVariation = map(maxIndex, 0, spectrum.length / 2, -30, 30);
+                 hue = (baseHue + hueVariation + 360) % 360;
+                 saturation = 40 + intensity * 50; // More saturation range
+            }
+
+
+            for (let x = 0; x < width; x += 10) { // Use larger grid for performance
+                for (let y = 0; y < height; y += 10) {
+                    let noiseVal = noise(
+                        x * noiseScale + layerIndex * 10,
+                        y * noiseScale + layerIndex * 10,
+                        noiseSpeed
+                    );
+
+                    // Use noise to modulate alpha and brightness slightly
+                    let alphaMod = map(noiseVal, 0, 1, 0.5, 1.5);
+                    let brightMod = map(noiseVal, 0, 1, 0.8, 1.2);
+
+                    fill(hue, saturation, brightness * brightMod, layerAlpha * alphaMod);
+                    noStroke();
+                    rect(x, y, 10, 10); // Draw larger rectangles
+                }
+            }
+            pop();
+        }
+
+        // --- Particle Class ---
+        class Particle {
+            constructor(x, y) {
+                this.pos = createVector(x, y);
+                this.vel = p5.Vector.random2D().mult(random(0.5, 1.5)); // Start with random velocity
+                this.acc = createVector(0, 0);
+this.maxSpeed = 4 + random(3); // Increased max speed
+        this.maxForce = 0.4; // Steering force limit
+                this.lifespan = 180 + random(120); // Slightly longer lifespan
+                this.baseHue = random(180, 300); // Blues/Pinks/Purples
+                this.saturation = random(50, 80); // Slightly more saturated
+                this.brightness = 90; // Start bright
+                this.size = random(2, 5); // Increased size for better trails
+            }
+
+            applyForce(force) {
+                this.acc.add(force);
+            }
+
+            seek(target) {
+                let desired = p5.Vector.sub(target, this.pos);
+                let d = desired.mag();
+                // Slow down as it approaches target
+                if (d < 100) {
+                    let m = map(d, 0, 100, 0, this.maxSpeed);
+                    desired.setMag(m);
+                } else {
+                    desired.setMag(this.maxSpeed);
+                }
+
+                // Steering = Desired minus Velocity
+                let steer = p5.Vector.sub(desired, this.vel);
+steer.limit(this.maxForce * 3); // Stronger steering force towards target
+                this.applyForce(steer);
+            }
+
+
+            followField() {
+                let noiseScale = 0.005; // Different scale for flow field
+                let angle = noise(this.pos.x * noiseScale, this.pos.y * noiseScale, time * 0.1) * 360 * 2; // Angle from noise
+                let flowForce = p5.Vector.fromAngle(radians(angle));
+                flowForce.setMag(0.05); // Set magnitude of flow force
+                this.applyForce(flowForce); // Use applyForce
+            }
+
+            update() {
+                this.vel.add(this.acc);
+                this.vel.limit(this.maxSpeed);
+                this.pos.add(this.vel);
+                this.acc.mult(0); // Reset acceleration
+                this.lifespan -= 1;
+
+                // Edge wrapping
+                if (this.pos.x > width) this.pos.x = 0;
+                if (this.pos.x < 0) this.pos.x = width;
+                if (this.pos.y > height) this.pos.y = 0;
+                if (this.pos.y < 0) this.pos.y = height;
+            }
+
+            display() {
+                let alpha = map(this.lifespan, 0, 250, 0, 80, true);
+                noStroke();
+                fill(this.baseHue, this.saturation, this.brightness, alpha);
+                ellipse(this.pos.x, this.pos.y, this.size, this.size);
+            }
+
+             reactToNote() {
+                 // Stronger acceleration and brightness flash
+                 this.vel.mult(2.5); // Increased multiplier
+                 this.brightness = 100;
+                 this.saturation = 100; // Max saturation briefly
+                 // Add a temporary lifespan boost?
+                 this.lifespan += 20;
+
+                 // Reset brightness/saturation after a delay (using setTimeout is tricky in p5 draw loop)
+                 // A simpler approach is to let it naturally fade back via update logic if needed,
+                 // or add a temporary state flag to the particle. Let's keep it simple for now.
+             }
+
+            isDead() {
+                return this.lifespan <= 0;
+            }
+        }
+
+
+        // --- Tone.js Audio Setup ---
+        function initAudio() {
+            if (audioStarted) return;
+            console.log("Initializing Audio...");
+
+            Tone.start().then(() => {
+                audioStarted = true;
+                console.log("Tone.js Started");
+
+                // --- Master Effects ---
+                reverb = new Tone.Reverb({
+                    decay: 8, // Long decay
+                    wet: 0.6 // Quite wet
+                }).toDestination();
+
+                chorus = new Tone.Chorus({
+                    frequency: 0.5, // Slow chorus
+                    depth: 0.7,
+                    feedback: 0.3
+                }).connect(reverb);
+
+                // --- Analysers (Connect later in the chain) ---
+                fft = new Tone.FFT({ size: 128, smoothing: 0.8 });
+                meter = new Tone.Meter({ smoothing: 0.6 });
+
+                // Connect analysers after chorus, before reverb, to capture combined signal
+                chorus.connect(meter);
+                chorus.connect(fft);
+
+
+                // --- Pad Synth & Filter ---
+                 padFilter = new Tone.Filter(800, "lowpass", -12).connect(chorus); // Filter -> Chorus -> Reverb
+                padSynth = new Tone.PolySynth(Tone.Synth, {
+                    oscillator: { type: 'fatsawtooth', count: 3, spread: 30 },
+                    envelope: { attack: 4, decay: 1, sustain: 0.8, release: 5 },
+                    volume: -18
+                }).connect(padFilter); // Pad synth goes into its filter first
+
+                // --- Melody Synth ---
+                melodyDelay = new Tone.FeedbackDelay("8n", 0.4).connect(chorus); // Delay -> Chorus -> Reverb
+                melodySynth = new Tone.MonoSynth({
+                    oscillator: { type: 'sawtooth' },
+                    envelope: { attack: 0.05, decay: 0.3, sustain: 0.2, release: 0.8 },
+                    filterEnvelope: { attack: 0.01, decay: 0.1, sustain: 0.1, release: 0.2, baseFrequency: 300, octaves: 3 },
+                    volume: -15 // Quieter than pads
+                }).connect(melodyDelay); // Melody synth goes into delay
+
+                // --- LFOs for modulation ---
+                filterLFO = new Tone.LFO({ // Keep modulating the pad filter
+                    frequency: 0.05, // Very slow
+                    min: 500,
+                    max: 2000,
+                    amplitude: 1
+                }).start();
+                // Connect LFO to the pad filter's frequency
+                 filterLFO.connect(padFilter.frequency);
+                // --- Transport & Scheduling ---
+                const chords = [
+                    ['C3', 'G3', 'Eb4', 'Bb4'], // Added 7th/9th for more color
+                    ['F2', 'C3', 'Ab3', 'Eb4'],
+                    ['Bb2', 'F3', 'D4', 'A4'],
+                    ['Eb3', 'Bb3', 'G4', 'D5']
+                ];
+                let chordIndex = 0;
+                currentPadNotes = chords[chordIndex]; // Store initial notes
+
+                // Schedule chord changes for Pad
+                Tone.Transport.scheduleRepeat(time => {
+                    chordIndex = (chordIndex + 1) % chords.length;
+                    currentPadNotes = chords[chordIndex]; // Update current notes
+                    padSynth.triggerAttackRelease(currentPadNotes, "8m", time); // Long note duration
+                }, "8m"); // Change every 8 measures
+
+                // --- Melody Sequence ---
+                const melodyPattern = [0, 1, 2, 1, 3, 2, 1, 0]; // Indices referring to currentPadNotes
+                let melodyNoteIndex = 0;
+                const melodySequence = new Tone.Sequence((time, noteIndex) => {
+                    if (currentPadNotes.length > noteIndex) {
+                        let note = currentPadNotes[noteIndex];
+                        // Transpose up an octave or two for melody
+                        note = Tone.Frequency(note).transpose(12).toNote();
+                        melodySynth.triggerAttackRelease(note, "4n", time);
+
+                        // Trigger visual reaction in some particles
+                        particles.forEach(p => {
+                            if (random() < 0.1) p.reactToNote();
+                        });
+                    }
+                }, melodyPattern, "2n").start(0); // Play melody notes every half measure
+
+                Tone.Transport.bpm.value = 50; // Slow BPM
+                Tone.Transport.start();
+
+                // Play initial pad chord
+                padSynth.triggerAttack(currentPadNotes);
+                // Hide instructions
+                const instructions = document.getElementById('instructions');
+                if (instructions) instructions.style.opacity = '0';
+
+            }).catch(e => {
+                console.error("Tone.js start failed:", e);
+            });
+        }
+
+        // --- User Interaction ---
+        function handleInteraction(x, y) {
+             if (!audioStarted) {
+                initAudio();
+            } else {
+                mouseTarget = createVector(x, y); // Set the target for seeking
+
+                // Trigger a melody note on click/tap
+                if (melodySynth && currentPadNotes.length > 0) {
+                     let randomNoteIndex = floor(random(currentPadNotes.length));
+                     let note = Tone.Frequency(currentPadNotes[randomNoteIndex]).transpose(12).toNote();
+                     melodySynth.triggerAttackRelease(note, "4n", Tone.now());
+                     // Make particles near the click react more strongly
+                     particles.forEach(p => {
+                         let d = dist(x, y, p.pos.x, p.pos.y);
+if (d < 150 && random() < 0.7) { // Higher chance if close
+                             p.reactToNote();
+                         } else if (random() < 0.1) { // Lower chance otherwise
+                             p.reactToNote();
+                         }
+                     });
+                }
+            }
+        }
+
+        function mousePressed() {
+            handleInteraction(mouseX, mouseY);
+        }
+
+         function touchStarted() {
+             if (touches.length > 0) {
+                 handleInteraction(touches[0].x, touches[0].y);
+             }
+             return false; // prevent default
+         }
+
+        // --- Window Resize ---
+        function windowResized() {
+            resizeCanvas(windowWidth, windowHeight);
+        }
+
+    </script>
+</body>
+</html>
