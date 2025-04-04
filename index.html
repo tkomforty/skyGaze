@@ -48,12 +48,16 @@
 
             // Map audio level to visual intensity/speed
             // Level is in dB (-Infinity to 0), map to a usable range (e.g., 0 to 1)
-            let intensity = map(level, -60, 0, 0, 1, true);
+let intensity = map(level, -60, 0, 0, 1, true);
+
+// Map particle density to reverb wetness
+            let particleDensity = particles.length / 100; // Normalize to 0-1 range
+            particleDensity = constrain(particleDensity, 0, 1);
+            reverb.wet.value = particleDensity;
 
             // --- Update & Draw Particles ---
             for (let i = particles.length - 1; i >= 0; i--) {
-                particles[i].followField();
-                if (mouseTarget) { // Apply seek behavior if target exists
+if (mouseTarget) { // Apply seek behavior if target exists
                     particles[i].seek(mouseTarget);
                 }
                 particles[i].update();
@@ -63,19 +67,23 @@
                 }
             }
              // Add new particles occasionally based on intensity (increased rate)
-             if (random() < intensity * 0.8 && particles.length < 200) { // Increased rate and max particles
+let maxParticles = 100;
+if (random() < intensity * 0.5 && particles.length < maxParticles) { // Increased rate and max particles
                  particles.push(new Particle(random(width), random(height)));
              }
+
+            // Kill old particles if the limit is reached
+            if (particles.length > maxParticles) {
+                particles.splice(0, 1); // Remove the oldest particle
+            }
 
 
             // --- Draw Noise Layers ---
             // Use default blend mode (BLEND)
-background(240, 10, 5, 2); // Lower alpha again for more trails
+background(240, 10, 5, 1); // Lower alpha again for more trails
 
             // Draw layers normally
-            drawNoiseLayer(1, intensity, spectrum, 220); // Base layer (cool color)
-            drawNoiseLayer(2, intensity, spectrum, 300); // Mid layer (warm color)
-            drawNoiseLayer(3, intensity, spectrum, 0);   // Top layer (accent color)
+drawNoiseLayer(1, intensity, spectrum, 220); // Base layer (cool color)
 
             time += 0.005 + intensity * 0.01; // Base speed + speed based on intensity
         }
@@ -110,11 +118,11 @@ background(240, 10, 5, 2); // Lower alpha again for more trails
             }
 
 
-            for (let x = 0; x < width; x += 10) { // Use larger grid for performance
+for (let x = 0; x < width; x += 10) { // Use larger grid for performance
                 for (let y = 0; y < height; y += 10) {
                     let noiseVal = noise(
-                        x * noiseScale + layerIndex * 10,
-                        y * noiseScale + layerIndex * 10,
+                        x * noiseScale + layerIndex * 20,
+                        y * noiseScale + layerIndex * 20,
                         noiseSpeed
                     );
 
@@ -142,7 +150,7 @@ this.maxSpeed = 4 + random(3); // Increased max speed
                 this.baseHue = random(180, 300); // Blues/Pinks/Purples
                 this.saturation = random(50, 80); // Slightly more saturated
                 this.brightness = 90; // Start bright
-                this.size = random(2, 5); // Increased size for better trails
+this.size = random(4, 7); // Increased size for better trails
             }
 
             applyForce(force) {
@@ -175,22 +183,19 @@ steer.limit(this.maxForce * 3); // Stronger steering force towards target
                 this.applyForce(flowForce); // Use applyForce
             }
 
-            update() {
+update() {
                 this.vel.add(this.acc);
                 this.vel.limit(this.maxSpeed);
                 this.pos.add(this.vel);
+                this.pos.x += random(-1, 1); // Add some horizontal randomness
+                this.pos.y += random(-1, 1); // Add some vertical randomness
                 this.acc.mult(0); // Reset acceleration
                 this.lifespan -= 1;
 
-                // Edge wrapping
-                if (this.pos.x > width) this.pos.x = 0;
-                if (this.pos.x < 0) this.pos.x = width;
-                if (this.pos.y > height) this.pos.y = 0;
-                if (this.pos.y < 0) this.pos.y = height;
             }
 
             display() {
-                let alpha = map(this.lifespan, 0, 250, 0, 80, true);
+let alpha = map(this.lifespan, 0, 250, 0, 90, true);
                 noStroke();
                 fill(this.baseHue, this.saturation, this.brightness, alpha);
                 ellipse(this.pos.x, this.pos.y, this.size, this.size);
@@ -225,9 +230,9 @@ steer.limit(this.maxForce * 3); // Stronger steering force towards target
                 console.log("Tone.js Started");
 
                 // --- Master Effects ---
-                reverb = new Tone.Reverb({
+reverb = new Tone.Reverb({
                     decay: 8, // Long decay
-                    wet: 0.6 // Quite wet
+                    wet: 0.4 // Quite wet
                 }).toDestination();
 
                 chorus = new Tone.Chorus({
@@ -326,20 +331,41 @@ steer.limit(this.maxForce * 3); // Stronger steering force towards target
             } else {
                 mouseTarget = createVector(x, y); // Set the target for seeking
 
-                // Trigger a melody note on click/tap
+// Trigger a melody note on click/tap
                 if (melodySynth && currentPadNotes.length > 0) {
-                     let randomNoteIndex = floor(random(currentPadNotes.length));
-                     let note = Tone.Frequency(currentPadNotes[randomNoteIndex]).transpose(12).toNote();
-                     melodySynth.triggerAttackRelease(note, "4n", Tone.now());
-                     // Make particles near the click react more strongly
-                     particles.forEach(p => {
-                         let d = dist(x, y, p.pos.x, p.pos.y);
-if (d < 150 && random() < 0.7) { // Higher chance if close
-                             p.reactToNote();
-                         } else if (random() < 0.1) { // Lower chance otherwise
-                             p.reactToNote();
-                         }
-                     });
+                    // Trigger harmonious and delayed notes
+                    let now = Tone.now();
+                    let delayTime = "4n"; // 1/4 note delay
+
+                    for (let i = 0; i < 2; i++) { // Trigger 2 notes
+                        let randomNoteIndex = floor(random(currentPadNotes.length));
+                        let baseNote = currentPadNotes[randomNoteIndex];
+let harmonicInterval = [0, 7, 12]; // Perfect unison, perfect fifth, octave
+                        let interval = harmonicInterval[floor(random(harmonicInterval.length))];
+                        let note = Tone.Frequency(baseNote)
+                            .transpose(12 + interval) // Transpose to create harmony
+                            .toNote();
+                        melodySynth.triggerAttackRelease(note, "8n", now + Tone.Time(delayTime).toSeconds() + (i * 0.1)); // Delayed start
+                    }
+
+                    // Make particles near the click react more strongly
+ particles.forEach(p => {
+                        let d = dist(x, y, p.pos.x, p.pos.y);
+                        if (d < 150 && random() < 0.2) { // Higher chance if close
+                            p.reactToNote();
+                        } else if (random() < 0.1) { // Lower chance otherwise
+                            p.reactToNote();
+                        }
+                    });
+
+                    // Create new particles near the mouse click
+                    for (let i = 0; i < 15; i++) {
+                        let angle = random(TWO_PI);
+                        let distance = random(20, 50);
+                        let newX = x + cos(angle) * distance;
+                        let newY = y + sin(angle) * distance;
+                        particles.push(new Particle(newX, newY));
+                    }
                 }
             }
         }
